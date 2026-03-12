@@ -26,15 +26,23 @@ import pytz
 from src.config.settings import (
     TIMEZONE,
     GEMINI_API_KEY,
-    MIN_PRICE_CHANGE_PERCENT,
-    ALWAYS_SHOW_PRIORITY,
     NOTION_API_KEY,
     NOTION_DATABASE_ID,
+    REPORTS_DIR,
     US_EASTERN_TZ,
 )
 from src.collectors import NewsCollector, StockCollector
-from src.analyzers import NewsAnalyzer, StockAnalyzer
+from src.collectors.sec_edgar import SECEdgarCollector
+from src.collectors.fda import FDACollector
+from src.collectors.economic_calendar import EconomicCalendarCollector
+from src.collectors.earnings import EarningsCalendarCollector
+from src.collectors.universe import UniverseCollector
+from src.collectors.intel_aggregator import IntelAggregator
+from src.analyzers import StockAnalyzer
+from src.analyzers.pre_market_v3 import PreMarketV3Analyzer
+from src.analyzers.industry_analyzer import IndustryAnalyzer
 from src.outputs import MarkdownReportGenerator, NotionPublisher
+from src.utils.trading_days import get_previous_trading_day
 
 
 def check_api_keys():
@@ -79,39 +87,75 @@ def extract_tickers_from_report(report_content: str, all_symbols: set) -> list[s
     return [ticker for ticker, _ in ticker_counts.most_common(15)]
 
 
-def filter_relevant_stocks(stocks: list, news_items: list, min_change: float = 3.0) -> dict:
-    """
-    Filter stocks to only show relevant ones:
-    - Stocks mentioned in news
-    - Stocks with significant price changes
-    - Priority stocks (always shown)
-    """
-    # Get tickers mentioned in news
-    news_tickers = set()
-    for item in news_items:
-        news_tickers.update(item.related_tickers)
+def _collect_sec_summary(hours_lookback: int, max_filings: int) -> str:
+    """Collect recent SEC 8-K filings and return formatted markdown. Empty string on error."""
+    try:
+        print("📋 Collecting SEC 8-K filings...")
+        sec_collector = SECEdgarCollector()
+        filings = sec_collector.collect_recent_filings(
+            form_types=["8-K"],
+            hours_lookback=hours_lookback,
+            max_per_type=max_filings,
+        )
+        if not filings:
+            print("   No recent 8-K filings found")
+            return ""
+        print(f"   Found {len(filings)} recent 8-K filings")
+        lines = ["### 📋 近期 SEC 8-K 公告\n"]
+        for filing in filings[:10]:
+            items_str = ", ".join(filing.metadata.get("items", [])[:2]) if filing.metadata.get("items") else ""
+            lines.append(f"- **{filing.title}** {f'({items_str})' if items_str else ''}")
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"   ⚠️ SEC collection error: {e}")
+        return ""
 
-    # Categorize stocks
-    result = {
-        "news_related": [],      # Mentioned in today's news
-        "significant_movers": [], # Big price changes
-        "priority": [],          # Priority watchlist
-    }
 
-    priority_symbols = {"AAPL", "AMD", "ARKK", "CHWY", "DXYZ", "MCHI", "MRNA", "PYPL", "TAL", "XYZ"}
+def _collect_fda_summary(days_lookback: int, max_results: int) -> str:
+    """Collect recent FDA updates and return formatted markdown. Empty string on error."""
+    try:
+        print("🏥 Collecting FDA updates...")
+        fda_collector = FDACollector()
+        updates = fda_collector.collect_all(days_lookback=days_lookback, max_results=max_results)
+        if not updates:
+            print("   No recent FDA updates")
+            return ""
+        print(f"   Found {len(updates)} FDA updates")
+        lines = ["### 🏥 FDA 最新動態\n"]
+        for update in updates[:5]:
+            lines.append(f"- **[{update.category}]** {update.title}")
+            if update.summary:
+                summary_text = update.summary[:150] + "..." if len(update.summary) > 150 else update.summary
+                lines.append(f"  - {summary_text}")
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"   ⚠️ FDA collection error: {e}")
+        return ""
 
-    for stock in stocks:
-        # Check if mentioned in news
-        if stock.symbol in news_tickers:
-            result["news_related"].append(stock)
-        # Check if significant mover
-        elif abs(stock.change_percent) >= min_change:
-            result["significant_movers"].append(stock)
-        # Check if priority
-        elif stock.symbol in priority_symbols and ALWAYS_SHOW_PRIORITY:
-            result["priority"].append(stock)
 
-    return result
+def _build_regulatory_updates(sec_summary: str, fda_summary: str) -> str:
+    """Combine SEC and FDA summaries into a single regulatory section."""
+    parts = [s for s in [sec_summary, fda_summary] if s]
+    return "\n\n".join(parts)
+
+
+def _format_weekly_market_summary(market_overview) -> str:
+    """Format market overview indices for weekly reports (Saturday/Sunday)."""
+    lines = []
+    if market_overview.sp500:
+        weekly = f" (本週 {market_overview.sp500.change_1w:+.2f}%)" if market_overview.sp500.change_1w else ""
+        lines.append(f"- S&P 500: {market_overview.sp500.current_price:,.2f}{weekly}")
+    if market_overview.nasdaq:
+        weekly = f" (本週 {market_overview.nasdaq.change_1w:+.2f}%)" if market_overview.nasdaq.change_1w else ""
+        lines.append(f"- NASDAQ: {market_overview.nasdaq.current_price:,.2f}{weekly}")
+    if market_overview.dow:
+        weekly = f" (本週 {market_overview.dow.change_1w:+.2f}%)" if market_overview.dow.change_1w else ""
+        lines.append(f"- Dow Jones: {market_overview.dow.current_price:,.2f}{weekly}")
+    if market_overview.vix:
+        lines.append(f"- VIX: {market_overview.vix:.2f}")
+    return "\n".join(lines)
+
+
 def generate_pre_market_report():
     """
     Generate pre-market report V3 (focused briefing format).
@@ -133,13 +177,6 @@ def generate_pre_market_report():
     news_collector = NewsCollector()
     stock_collector = StockCollector()
     report_generator = MarkdownReportGenerator()
-
-    from src.collectors.sec_edgar import SECEdgarCollector
-    from src.collectors.fda import FDACollector
-    from src.collectors.economic_calendar import EconomicCalendarCollector
-    from src.collectors.earnings import EarningsCalendarCollector
-    from src.collectors.universe import UniverseCollector
-    from src.analyzers.pre_market_v3 import PreMarketV3Analyzer
 
     # Collect news
     print("📰 Collecting news...")
@@ -184,53 +221,20 @@ def generate_pre_market_report():
     else:
         print(f"   Universe size: {len(universe_data.tickers)} tickers")
 
-    # Collect SEC 8-K filings (past 48 hours)
-    sec_summary = ""
-    try:
-        print("\n📋 Collecting SEC 8-K filings...")
-        sec_collector = SECEdgarCollector()
-        sec_filings = sec_collector.collect_recent_filings(
-            form_types=["8-K"],
-            hours_lookback=48,
-            max_per_type=20,
-        )
-        if sec_filings:
-            sec_lines = ["### 📋 近期 SEC 8-K 公告\n"]
-            for filing in sec_filings[:10]:
-                items_str = ", ".join(filing.metadata.get("items", [])[:2]) if filing.metadata.get("items") else ""
-                sec_lines.append(f"- **{filing.title}** {f'({items_str})' if items_str else ''}")
-            sec_summary = "\n".join(sec_lines)
-    except Exception as e:
-        print(f"   ⚠️ SEC collection error: {e}")
+    # Collect SEC and FDA (past 48 hours for pre-market)
+    print()
+    sec_summary = _collect_sec_summary(hours_lookback=48, max_filings=20)
+    fda_summary = _collect_fda_summary(days_lookback=2, max_results=10)
+    regulatory_updates = _build_regulatory_updates(sec_summary, fda_summary)
 
-    # Collect FDA updates (past 48 hours)
-    fda_summary = ""
-    try:
-        print("🏥 Collecting FDA updates...")
-        fda_collector = FDACollector()
-        fda_updates = fda_collector.collect_all(days_lookback=2, max_results=10)
-        if fda_updates:
-            fda_lines = ["### 🏥 FDA 最新動態\n"]
-            for update in fda_updates[:5]:
-                if update.summary:
-                    summary_text = update.summary[:150] + "..." if len(update.summary) > 150 else update.summary
-                    fda_lines.append(f"- **[{update.category}]** {update.title}")
-                    fda_lines.append(f"  - {summary_text}")
-                else:
-                    fda_lines.append(f"- **[{update.category}]** {update.title}")
-            fda_summary = "\n".join(fda_lines)
-    except Exception as e:
-        print(f"   ⚠️ FDA collection error: {e}")
-
-    # Combine regulatory updates
-    regulatory_updates = ""
-    if sec_summary or fda_summary:
-        regulatory_parts = []
-        if sec_summary:
-            regulatory_parts.append(sec_summary)
-        if fda_summary:
-            regulatory_parts.append(fda_summary)
-        regulatory_updates = "\n\n".join(regulatory_parts)
+    # Fetch yesterday's pre-market report for hidden layer comparison
+    print("\n📖 Fetching yesterday's pre-market report...")
+    notion_publisher = NotionPublisher()
+    yesterday_report = notion_publisher.get_yesterday_pre_market(date_tw_str)
+    if yesterday_report["available"]:
+        print(f"   Found: {yesterday_report['date']} ({yesterday_report['source']})")
+    else:
+        print(f"   {yesterday_report['fallback_note']}")
 
     # Generate report sections with LLM
     print("\n🤖 Generating V3 sections...")
@@ -242,6 +246,9 @@ def generate_pre_market_report():
         news_items=news_items,
         watchlist_stocks=all_stocks,
         universe_data=universe_data,
+        yesterday_report=yesterday_report,
+        sec_summary=sec_summary,
+        fda_summary=fda_summary,
     )
 
     # Generate final report
@@ -264,8 +271,7 @@ def generate_pre_market_report():
 
     tags = (meta.get("watchlist_focus_symbols", []) + meta.get("event_driven_symbols", []))[:10]
     print(f"   Tags: {tags}")
-
-    notion_publisher = NotionPublisher()
+    # notion_publisher already initialized above
     page_url = notion_publisher.create_daily_page(
         title=title,
         content=report,
@@ -288,25 +294,7 @@ def generate_post_market_report():
     now = datetime.now(tz)
     print(f"Time: {now.strftime('%Y-%m-%d %H:%M')} ({TIMEZONE})\n")
 
-    # 計算美股交易日
     # Post-market 報告永遠報告「前一個交易日」的結果
-    # 因為報告在美股收盤後生成（台北 08:00 = 美股收盤後 3 小時）
-    from datetime import timedelta
-    from pathlib import Path
-    from src.config.settings import REPORTS_DIR
-
-    def get_previous_trading_day(date: datetime) -> datetime:
-        """Get the previous trading day, skipping weekends."""
-        result = date - timedelta(days=1)
-        # Skip Sunday (6) -> go to Friday
-        if result.weekday() == 6:  # Sunday
-            result = result - timedelta(days=2)
-        # Skip Saturday (5) -> go to Friday
-        elif result.weekday() == 5:  # Saturday
-            result = result - timedelta(days=1)
-        return result
-
-    # 永遠使用前一個交易日
     trading_day = get_previous_trading_day(now)
     trading_date = trading_day.strftime("%Y-%m-%d")
 
@@ -341,58 +329,14 @@ def generate_post_market_report():
     stock_analyzer = StockAnalyzer()
     report_generator = MarkdownReportGenerator()
 
-    # Import SEC and FDA collectors
-    from src.collectors.sec_edgar import SECEdgarCollector
-    from src.collectors.fda import FDACollector
-
     # Get news for context
     print("\n📰 Collecting news...")
     news_items = news_collector.collect_all()
 
-    # Collect SEC 8-K filings (past 24 hours for post-market)
-    sec_summary = ""
-    try:
-        print("📋 Collecting SEC 8-K filings...")
-        sec_collector = SECEdgarCollector()
-        sec_filings = sec_collector.collect_recent_filings(
-            form_types=["8-K"],
-            hours_lookback=24,
-            max_per_type=15
-        )
-        if sec_filings:
-            print(f"   Found {len(sec_filings)} recent 8-K filings")
-            sec_lines = ["### 📋 今日 SEC 8-K 公告\n"]
-            for filing in sec_filings[:8]:
-                items_str = ", ".join(filing.metadata.get("items", [])[:2]) if filing.metadata.get("items") else ""
-                sec_lines.append(f"- **{filing.title}** {f'({items_str})' if items_str else ''}")
-            sec_summary = "\n".join(sec_lines)
-        else:
-            print("   No recent 8-K filings found")
-    except Exception as e:
-        print(f"   ⚠️ SEC collection error: {e}")
-
-    # Collect FDA updates (past 24 hours)
-    fda_summary = ""
-    try:
-        print("🏥 Collecting FDA updates...")
-        fda_collector = FDACollector()
-        fda_updates = fda_collector.collect_all(days_lookback=1, max_results=8)
-        if fda_updates:
-            print(f"   Found {len(fda_updates)} FDA updates")
-            fda_lines = ["### 🏥 FDA 最新動態\n"]
-            for update in fda_updates[:5]:
-                # Include summary for context
-                if update.summary:
-                    summary_text = update.summary[:150] + "..." if len(update.summary) > 150 else update.summary
-                    fda_lines.append(f"- **[{update.category}]** {update.title}")
-                    fda_lines.append(f"  - {summary_text}")
-                else:
-                    fda_lines.append(f"- **[{update.category}]** {update.title}")
-            fda_summary = "\n".join(fda_lines)
-        else:
-            print("   No recent FDA updates")
-    except Exception as e:
-        print(f"   ⚠️ FDA collection error: {e}")
+    # Collect SEC and FDA (past 24 hours for post-market)
+    sec_summary = _collect_sec_summary(hours_lookback=24, max_filings=15)
+    fda_summary = _collect_fda_summary(days_lookback=1, max_results=8)
+    regulatory_updates = _build_regulatory_updates(sec_summary, fda_summary)
 
     # Get market data
     print("📊 Fetching market data...")
@@ -430,16 +374,6 @@ def generate_post_market_report():
             f"- [{item.source}] {item.title}"
             for item in after_hours_items[:5]
         ])
-
-    # Combine regulatory updates
-    regulatory_updates = ""
-    if sec_summary or fda_summary:
-        regulatory_parts = []
-        if sec_summary:
-            regulatory_parts.append(sec_summary)
-        if fda_summary:
-            regulatory_parts.append(fda_summary)
-        regulatory_updates = "\n\n".join(regulatory_parts)
 
     # Generate report
     print("\n📝 Generating report...")
@@ -499,10 +433,6 @@ def generate_saturday_report(quick_mode: bool = False):
     now = datetime.now(tz)
     print(f"Time: {now.strftime('%Y-%m-%d %H:%M')} ({TIMEZONE})\n")
 
-    # Import new components
-    from src.collectors.intel_aggregator import IntelAggregator
-    from src.analyzers.industry_analyzer import IndustryAnalyzer
-
     # Initialize components
     intel_aggregator = IntelAggregator()
     industry_analyzer = IndustryAnalyzer()
@@ -531,20 +461,7 @@ def generate_saturday_report(quick_mode: bool = False):
     print("\n📈 Fetching market data...")
     market_overview = stock_collector.get_market_overview()
 
-    # Generate market summary
-    market_summary_lines = []
-    if market_overview.sp500:
-        weekly = f" (本週 {market_overview.sp500.change_1w:+.2f}%)" if market_overview.sp500.change_1w else ""
-        market_summary_lines.append(f"- S&P 500: {market_overview.sp500.current_price:,.2f}{weekly}")
-    if market_overview.nasdaq:
-        weekly = f" (本週 {market_overview.nasdaq.change_1w:+.2f}%)" if market_overview.nasdaq.change_1w else ""
-        market_summary_lines.append(f"- NASDAQ: {market_overview.nasdaq.current_price:,.2f}{weekly}")
-    if market_overview.dow:
-        weekly = f" (本週 {market_overview.dow.change_1w:+.2f}%)" if market_overview.dow.change_1w else ""
-        market_summary_lines.append(f"- Dow Jones: {market_overview.dow.current_price:,.2f}{weekly}")
-    if market_overview.vix:
-        market_summary_lines.append(f"- VIX: {market_overview.vix:.2f}")
-    week_market_summary = "\n".join(market_summary_lines)
+    week_market_summary = _format_weekly_market_summary(market_overview)
 
     # Run industry analysis
     if quick_mode:
@@ -604,9 +521,6 @@ def generate_sunday_report():
     now = datetime.now(tz)
     print(f"Time: {now.strftime('%Y-%m-%d %H:%M')} ({TIMEZONE})\n")
 
-    # Import IntelAggregator for comprehensive data collection
-    from src.collectors.intel_aggregator import IntelAggregator
-
     # Initialize components
     intel_aggregator = IntelAggregator()
     stock_collector = StockCollector()
@@ -638,18 +552,7 @@ def generate_sunday_report():
     market_overview = stock_collector.get_market_overview()
 
     # Generate weekly recap summary
-    recap_lines = ["**本週指數表現：**"]
-    if market_overview.sp500:
-        weekly = f" (本週 {market_overview.sp500.change_1w:+.2f}%)" if market_overview.sp500.change_1w else ""
-        recap_lines.append(f"- S&P 500: {market_overview.sp500.current_price:,.2f}{weekly}")
-    if market_overview.nasdaq:
-        weekly = f" (本週 {market_overview.nasdaq.change_1w:+.2f}%)" if market_overview.nasdaq.change_1w else ""
-        recap_lines.append(f"- NASDAQ: {market_overview.nasdaq.current_price:,.2f}{weekly}")
-    if market_overview.dow:
-        weekly = f" (本週 {market_overview.dow.change_1w:+.2f}%)" if market_overview.dow.change_1w else ""
-        recap_lines.append(f"- Dow Jones: {market_overview.dow.current_price:,.2f}{weekly}")
-    if market_overview.vix:
-        recap_lines.append(f"- VIX: {market_overview.vix:.2f}")
+    recap_lines = ["**本週指數表現：**", _format_weekly_market_summary(market_overview)]
 
     # Add weekly highlights from intel sources
     sec_items = [i for i in intel_items if i.source_type.value == "sec_filing"]
@@ -783,15 +686,11 @@ def test_components():
     print("\n3️⃣ Testing AI Analyzers...")
     if GEMINI_API_KEY:
         try:
-            analyzer = NewsAnalyzer()
-            print("   ✅ NewsAnalyzer initialized")
-
             analyzer = StockAnalyzer()
             print("   ✅ StockAnalyzer initialized")
 
-            from src.analyzers.pre_market_analyzer import PreMarketAnalyzer
-            analyzer = PreMarketAnalyzer()
-            print("   ✅ PreMarketAnalyzer initialized")
+            analyzer = PreMarketV3Analyzer()
+            print("   ✅ PreMarketV3Analyzer initialized")
         except Exception as e:
             print(f"   ❌ Error: {e}")
     else:

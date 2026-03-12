@@ -17,9 +17,6 @@ from datetime import datetime
 from typing import Optional
 import json
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config.settings import (
     GEMINI_API_KEY,

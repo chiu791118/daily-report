@@ -17,9 +17,6 @@ from youtube_transcript_api._errors import (
 )
 from youtube_transcript_api.proxies import WebshareProxyConfig
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config.settings import (
     YOUTUBE_API_KEY,

@@ -7,15 +7,12 @@ from datetime import datetime
 from typing import Optional
 import pytz
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 from src.config.settings import (
     NOTION_API_KEY,
     NOTION_DATABASE_ID,
     TIMEZONE,
 )
+from src.utils.trading_days import get_previous_trading_day
 
 
 class NotionPublisher:
@@ -38,29 +35,10 @@ class NotionPublisher:
     def _get_database_properties(self) -> set:
         """Get the set of property names that exist in the database."""
         try:
-            # First try to get properties from database schema
             db_info = self.client.databases.retrieve(database_id=self.database_id)
             properties = db_info.get("properties", {})
             if properties:
                 return set(properties.keys())
-
-            # If no properties in schema, query existing pages to find properties
-            import httpx
-            response = httpx.post(
-                f"https://api.notion.com/v1/databases/{self.database_id}/query",
-                headers={
-                    "Authorization": f"Bearer {NOTION_API_KEY}",
-                    "Notion-Version": "2022-06-28",
-                    "Content-Type": "application/json"
-                },
-                json={"page_size": 1}
-            )
-            data = response.json()
-            if data.get("results"):
-                page = data["results"][0]
-                return set(page.get("properties", {}).keys())
-
-            # Default: assume standard properties exist
             return {"Name", "Date", "Select", "Tags"}
         except Exception as e:
             print(f"Warning: Could not retrieve database properties: {e}")
@@ -398,20 +376,7 @@ class NotionPublisher:
                 - fallback_note: str - Explanation if using fallback
                 - date: str - The date of the report that was found
         """
-        from datetime import timedelta
-
         current_date = datetime.strptime(trading_date, "%Y-%m-%d")
-
-        def get_previous_trading_day(date: datetime, offset: int = 1) -> datetime:
-            """Get the previous trading day, skipping weekends."""
-            result = date
-            days_back = 0
-            while days_back < offset:
-                result = result - timedelta(days=1)
-                # Skip Saturday (5) and Sunday (6)
-                if result.weekday() < 5:
-                    days_back += 1
-            return result
 
         # Try to find yesterday's report (with up to 3 trading days lookback)
         for lookback in range(1, 4):

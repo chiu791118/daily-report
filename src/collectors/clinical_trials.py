@@ -8,9 +8,6 @@ from typing import Optional
 import pytz
 import time
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.collectors.base import IntelItem, SourceType, BaseCollector
 from src.config.settings import TIMEZONE

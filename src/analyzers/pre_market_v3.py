@@ -11,9 +11,6 @@ from google.genai import types
 
 import pytz
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config.settings import (
     GEMINI_API_KEY,
@@ -21,7 +18,7 @@ from src.config.settings import (
     TIMEZONE,
     US_EASTERN_TZ,
 )
-from src.prompts.pre_market import PRE_MARKET_V3_PROMPT
+from src.prompts.pre_market import PRE_MARKET_V3_PROMPT, HIDDEN_LAYER_PROMPT
 from src.collectors.universe import UniverseData
 
 
@@ -37,6 +34,67 @@ class PreMarketV3Analyzer:
         self.tz_taipei = pytz.timezone(TIMEZONE)
         self.tz_et = pytz.timezone(US_EASTERN_TZ)
 
+    def _run_hidden_layer(
+        self,
+        yesterday_report: dict,
+        news_items: list,
+        sec_summary: str,
+        fda_summary: str,
+        market_overview,
+    ) -> dict:
+        """Run hidden processing layer: compare today vs yesterday to identify changes."""
+        if yesterday_report and yesterday_report.get("available"):
+            yesterday_text = yesterday_report["content"]
+            if yesterday_report.get("fallback_note"):
+                yesterday_text = f"[注意: {yesterday_report['fallback_note']}]\n\n{yesterday_text}"
+        else:
+            yesterday_text = "（昨日報告不可用）"
+
+        news_text = "\n".join(
+            f"- [{item.source}] {item.title}" for item in news_items[:30]
+        ) or "無新聞數據"
+
+        market_parts = []
+        if market_overview.sp500:
+            market_parts.append(
+                f"S&P 500: {market_overview.sp500.current_price:,.2f} ({market_overview.sp500.change_percent:+.2f}%)"
+            )
+        if market_overview.nasdaq:
+            market_parts.append(
+                f"NASDAQ: {market_overview.nasdaq.current_price:,.2f} ({market_overview.nasdaq.change_percent:+.2f}%)"
+            )
+        if market_overview.vix is not None:
+            market_parts.append(f"VIX: {market_overview.vix:.2f}")
+        market_text = "\n".join(market_parts) or "無市場數據"
+
+        prompt = HIDDEN_LAYER_PROMPT.format(
+            yesterday_report=yesterday_text,
+            news_data=news_text,
+            sec_data=sec_summary or "無 SEC 數據",
+            fda_data=fda_summary or "無 FDA 數據",
+            market_data=market_text,
+        )
+
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=2000,
+                ),
+            )
+            result = self._parse_json(response.text)
+            if result:
+                print(
+                    f"   Hidden layer: {len(result.get('macro_changes', []))} macro, "
+                    f"{len(result.get('company_changes', []))} company changes"
+                )
+            return result
+        except Exception as e:
+            print(f"   ⚠️ Hidden layer error: {e}")
+            return {}
+
     def generate_sections(
         self,
         market_overview,
@@ -45,12 +103,27 @@ class PreMarketV3Analyzer:
         news_items: list,
         watchlist_stocks: list,
         universe_data: UniverseData,
+        yesterday_report: dict = None,
+        sec_summary: str = "",
+        fda_summary: str = "",
     ) -> tuple[dict, dict]:
         """
         Returns:
             sections: dict of report sections
             meta: dict with symbols and news digest
         """
+        # Run hidden layer first to get temporal change signals
+        yesterday_changes = {}
+        if yesterday_report is not None:
+            print("   Running hidden layer analysis...")
+            yesterday_changes = self._run_hidden_layer(
+                yesterday_report=yesterday_report,
+                news_items=news_items,
+                sec_summary=sec_summary,
+                fda_summary=fda_summary,
+                market_overview=market_overview,
+            )
+
         watchlist_candidates, watchlist_symbols = self._build_watchlist_candidates(
             watchlist_stocks, news_items, earnings_events
         )
@@ -87,6 +160,7 @@ class PreMarketV3Analyzer:
             "news_highlights": news_digest[:20],
             "watchlist_candidates": watchlist_candidates[:15],
             "event_driven_candidates": event_candidates[:15],
+            "yesterday_changes": yesterday_changes,
         }
 
         prompt = PRE_MARKET_V3_PROMPT.format(

@@ -149,7 +149,6 @@ HOURS_LOOKBACK = 24  # Look back 24 hours for new content
 
 # Stock filtering settings
 MIN_PRICE_CHANGE_PERCENT = 3.0  # Only show stocks with >= 3% change
-ALWAYS_SHOW_PRIORITY = True  # Always include priority stocks in reports
 
 # Timezone
 TIMEZONE = "Asia/Taipei"

@@ -5,9 +5,6 @@ Uses Gemini AI to analyze stocks with integrated news and video insights.
 from google import genai
 from google.genai import types
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config.settings import (
     GEMINI_API_KEY,

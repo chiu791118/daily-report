@@ -6,9 +6,6 @@ from datetime import datetime
 from pathlib import Path
 import pytz
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 from src.config.settings import REPORTS_DIR, TIMEZONE
 
 # Default tomorrow focus content (defined outside f-string for Python 3.9 compatibility)
@@ -22,106 +19,6 @@ class MarkdownReportGenerator:
 
     def __init__(self):
         self.tz = pytz.timezone(TIMEZONE)
-
-    def generate_pre_market_report(
-        self,
-        news_analysis: dict,
-        market_overview: str,
-        watchlist_summary: str,
-        regulatory_updates: str = "",
-        global_snapshot: str = "",
-        categorized_news: dict = None,
-        hashtags: list = None,
-    ) -> str:
-        """Generate pre-market (21:00 Taiwan time) report."""
-        now = datetime.now(self.tz)
-        date_str = now.strftime("%Y-%m-%d")
-        weekday_map = {0: "週一", 1: "週二", 2: "週三", 3: "週四", 4: "週五", 5: "週六", 6: "週日"}
-        weekday = weekday_map[now.weekday()]
-
-        # Build global snapshot section (NEW - quick overview)
-        snapshot_section = ""
-        if global_snapshot:
-            snapshot_section = f"""
-## ⚡ 全球快覽
-
-{global_snapshot}
-
----
-"""
-
-        # Build categorized news section (NEW - structured news breakdown)
-        categorized_section = ""
-        if categorized_news:
-            macro_news = categorized_news.get('macro', '')
-            tech_news = categorized_news.get('tech', '')
-            industry_news = categorized_news.get('industry', '')
-
-            categorized_section = f"""
-### 🌍 宏觀與政策 (Macro & Policy)
-
-{macro_news if macro_news else "今日無重大宏觀政策新聞。"}
-
-### ⚡ 科技與地緣 (Tech & Geopolitics)
-
-{tech_news if tech_news else "今日無重大科技地緣新聞。"}
-
-### 🏢 巨頭與產業 (Market Movers)
-
-{industry_news if industry_news else "今日無重大產業新聞。"}
-
----
-"""
-
-        # Build regulatory section if available
-        regulatory_section = ""
-        if regulatory_updates:
-            regulatory_section = f"""
-## 📋 監管與公告動態
-
-{regulatory_updates}
-
----
-"""
-
-        # Build hashtag section (NEW - theme tags)
-        hashtag_section = ""
-        if hashtags:
-            hashtag_str = " ".join([f"#{tag}" for tag in hashtags[:6]])
-            hashtag_section = f"\n{hashtag_str}\n"
-
-        report = f"""# 📈 每日市場摘要 - 開盤前報告
-**🔥 全球財富早報 🔥**
-
-**📅 {date_str} | {weekday}**
-**⏰ 生成時間:** {now.strftime("%H:%M")} (台北時間)
-
----
-
-{snapshot_section}## 🌍 市場概況
-
-{market_overview}
-
----
-
-## 📰 新聞摘要
-
-**今日新聞數量:** {news_analysis.get('news_count', 0)} 則
-**市場情緒:** {self._sentiment_emoji(news_analysis.get('sentiment', 'neutral'))} {news_analysis.get('sentiment', 'neutral').upper()}
-
-{news_analysis.get('analysis', '無新聞分析')}
-
----
-
-{categorized_section}{regulatory_section}## 📊 觀察清單
-
-{watchlist_summary}
-
----
-{hashtag_section}
-*Daily Market Digest | {date_str}*
-"""
-        return report
 
     def generate_post_market_report(
         self,
@@ -357,100 +254,6 @@ class MarkdownReportGenerator:
 """
         return report
 
-    def generate_pre_market_report_v2(
-        self,
-        layered_result,
-        regulatory_updates: str = "",
-        hashtags: list = None,
-    ) -> str:
-        """
-        Generate pre-market report V2 with 6-layer structure.
-
-        Structure:
-        - Layer 0: Executive Snapshot (5 fixed blocks)
-        - Layer 1: What Changed Today (Macro/Industry/Company)
-        - Layer 2: Structural Interpretation (max 3 inferences + Quality Gate)
-        - Layer 3: Asset Allocation Watchlist (🟢🟡🔴)
-        - Layer 4: Equity Signals (4A Watchlist + 4B New Discoveries)
-        - Layer 5: Decision Log (3 lines)
-        - Market Data Appendix
-        - News Summary (paragraph style)
-
-        Args:
-            layered_result: LayeredReportResult from PreMarketAnalyzer
-            regulatory_updates: Formatted SEC/FDA updates
-            hashtags: List of hashtag strings
-
-        Returns:
-            Complete markdown report
-        """
-        now = datetime.now(self.tz)
-        date_str = now.strftime("%Y-%m-%d")
-        weekday_map = {0: "週一", 1: "週二", 2: "週三", 3: "週四", 4: "週五", 5: "週六", 6: "週日"}
-        weekday = weekday_map[now.weekday()]
-
-        # Build regulatory section if available
-        regulatory_section = ""
-        if regulatory_updates:
-            regulatory_section = f"""
----
-
-## 📋 監管與公告動態
-
-{regulatory_updates}
-"""
-
-        # Build hashtag section
-        hashtag_section = ""
-        if hashtags:
-            hashtag_str = " ".join([f"#{tag}" for tag in hashtags[:8]])
-            hashtag_section = f"\n{hashtag_str}\n"
-
-        report = f"""# 📈 每日市場摘要 - 開盤前報告 V2
-**🔥 全球財富早報 🔥**
-
-**📅 {date_str} | {weekday}**
-**⏰ 生成時間:** {now.strftime("%H:%M")} (台北時間)
-
----
-
-{layered_result.layer_0}
-
----
-
-{layered_result.layer_1}
-
----
-
-{layered_result.layer_2}
-
----
-
-{layered_result.layer_3}
-
----
-
-{layered_result.layer_4}
-
----
-
-{layered_result.layer_5}
-{regulatory_section}
----
-
-{layered_result.market_appendix}
-
----
-
-## 📰 今日新聞摘要
-
-{layered_result.news_summary}
-
----
-{hashtag_section}
-*Daily Market Digest V2 | {date_str}*
-"""
-        return report
     def generate_pre_market_report_v3(
         self,
         sections: dict,
@@ -583,8 +386,7 @@ class MarkdownReportGenerator:
                 f"{row.get('event','')} | {importance_str} | {row.get('forecast','—') or '—'} | "
                 f"{row.get('previous','—') or '—'} |"
             )
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     def _format_earnings_calendar(self, rows: list, note: str = "") -> str:
         if not rows:
@@ -600,8 +402,7 @@ class MarkdownReportGenerator:
                 f"{row.get('time_taipei','')} | {row.get('eps_estimate','—') or '—'} | "
                 f"{row.get('revenue_estimate','—') or '—'} |"
             )
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     def _format_market_snapshot(self, overview) -> str:
         lines = []
@@ -616,11 +417,8 @@ class MarkdownReportGenerator:
         if overview.market_sentiment:
             lines.append(f"- 市場情緒: {overview.market_sentiment}")
         if not lines:
-            return "- 市場數據不足
-"
-        return "
-".join(lines) + "
-"
+            return "- 市場數據不足\n"
+        return "\n".join(lines) + "\n"
 
     def _format_numbered(self, items: list, expected: int) -> str:
         if not items:
@@ -628,14 +426,12 @@ class MarkdownReportGenerator:
         lines = []
         for i, item in enumerate(items[:expected], 1):
             lines.append(f"{i}. {item}")
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     def _format_bullets(self, items: list) -> str:
         if not items:
             return "無資料"
-        return "
-".join([f"- {i}" for i in items])
+        return "\n".join([f"- {i}" for i in items])
 
     def _format_watchlist_table(self, items: list) -> str:
         if not items:
@@ -648,8 +444,7 @@ class MarkdownReportGenerator:
             lines.append(
                 f"| {item.get('symbol','')} | {item.get('why','')} | {item.get('watch','')} |"
             )
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     def _format_event_driven_table(self, items: list) -> str:
         if not items:
@@ -662,8 +457,7 @@ class MarkdownReportGenerator:
             lines.append(
                 f"| {item.get('symbol','')} | {item.get('why','')} | {item.get('impact','')} |"
             )
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     def _format_news_digest(self, news_items: list) -> str:
         if not news_items:
@@ -674,8 +468,7 @@ class MarkdownReportGenerator:
             if item.get("time_et") and item.get("time_taipei"):
                 time_part = f" ({item.get('time_et')} ET / {item.get('time_taipei')} 台北)"
             lines.append(f"- [{item.get('source','')}] {item.get('title','')}{time_part}")
-        return "
-".join(lines)
+        return "\n".join(lines)
 
 
 

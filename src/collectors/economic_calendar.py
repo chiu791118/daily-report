@@ -10,9 +10,6 @@ import pytz
 import requests
 from dateutil import parser
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config.settings import (
     TRADING_ECONOMICS_API_KEY,

@@ -10,9 +10,6 @@ from typing import Optional
 from dataclasses import dataclass, field
 import pytz
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config.settings import (
     CONFIG_DIR,
@@ -150,33 +147,130 @@ class StockCollector:
         return overview
 
     def collect_watchlist(self) -> list[StockData]:
-        """Collect data for all stocks in watchlist."""
-        all_stocks = []
-
+        """Collect data for all stocks in watchlist using batch download for performance."""
+        # Gather all stock metadata first
+        stock_meta = []
         for category, stocks in self.watchlist.get("watchlist", {}).items():
             if category == "indices":
-                continue  # Skip indices, handled separately
-
+                continue
             for stock_info in stocks:
-                try:
-                    stock_data = self._get_stock_data(
-                        symbol=stock_info["symbol"],
-                        name=stock_info["name"],
-                        category=category,
-                        notes=stock_info.get("notes", ""),
-                    )
-                    # Add key levels if configured
-                    key_levels = self.watchlist.get("key_levels", {}).get(
-                        stock_info["symbol"], {}
-                    )
-                    stock_data.support_levels = key_levels.get("support", [])
-                    stock_data.resistance_levels = key_levels.get("resistance", [])
+                stock_meta.append({
+                    "symbol": stock_info["symbol"],
+                    "name": stock_info["name"],
+                    "category": category,
+                    "notes": stock_info.get("notes", ""),
+                    "key_levels": self.watchlist.get("key_levels", {}).get(stock_info["symbol"], {}),
+                })
 
-                    all_stocks.append(stock_data)
-                except Exception as e:
-                    print(f"Error fetching {stock_info['symbol']}: {e}")
+        if not stock_meta:
+            return []
+
+        symbols = [s["symbol"] for s in stock_meta]
+
+        # Batch download 1-year history for all symbols at once
+        print(f"   Batch downloading history for {len(symbols)} symbols...")
+        try:
+            batch_hist = yf.download(
+                symbols,
+                period="1y",
+                group_by="ticker",
+                auto_adjust=True,
+                progress=False,
+            )
+        except Exception as e:
+            print(f"   ⚠️ Batch download failed, falling back to individual: {e}")
+            batch_hist = None
+
+        all_stocks = []
+        for meta in stock_meta:
+            try:
+                stock_data = self._get_stock_data_from_batch(meta, batch_hist, symbols)
+                stock_data.support_levels = meta["key_levels"].get("support", [])
+                stock_data.resistance_levels = meta["key_levels"].get("resistance", [])
+                all_stocks.append(stock_data)
+            except Exception as e:
+                print(f"Error fetching {meta['symbol']}: {e}")
 
         return all_stocks
+
+    def _get_hist_for_symbol(self, symbol: str, batch_hist, all_symbols: list) -> pd.DataFrame:
+        """Extract single-symbol history from batch download result."""
+        if batch_hist is None or batch_hist.empty:
+            return pd.DataFrame()
+        try:
+            if len(all_symbols) == 1:
+                return batch_hist
+            # MultiIndex columns when multiple symbols
+            if symbol in batch_hist.columns.get_level_values(1):
+                return batch_hist.xs(symbol, axis=1, level=1).dropna(how="all")
+        except Exception:
+            pass
+        return pd.DataFrame()
+
+    def _get_stock_data_from_batch(self, meta: dict, batch_hist, all_symbols: list) -> StockData:
+        """Build StockData using batch history + fast_info for current quote."""
+        symbol = meta["symbol"]
+        ticker = yf.Ticker(symbol)
+
+        # Use fast_info for current quote (much faster than .info)
+        fi = ticker.fast_info
+        current_price = fi.last_price or 0
+        previous_close = fi.previous_close or 0
+        change_percent = ((current_price / previous_close) - 1) * 100 if previous_close else 0
+        volume = fi.three_month_average_volume or 0  # fallback; updated below
+        high_52w = fi.year_high or 0
+        low_52w = fi.year_low or 0
+        market_cap = fi.market_cap or 0
+
+        # Get history slice from batch
+        hist = self._get_hist_for_symbol(symbol, batch_hist, all_symbols)
+
+        # Fallback: individual download if batch failed for this symbol
+        if hist.empty:
+            hist = ticker.history(period="1y")
+
+        # Technical indicators from history
+        sma_20 = float(hist["Close"].rolling(window=20).mean().iloc[-1]) if len(hist) >= 20 else None
+        sma_50 = float(hist["Close"].rolling(window=50).mean().iloc[-1]) if len(hist) >= 50 else None
+        sma_200 = float(hist["Close"].rolling(window=200).mean().iloc[-1]) if len(hist) >= 200 else None
+        rsi_14 = self._calculate_rsi(hist["Close"], 14)
+
+        # Performance periods
+        change_1w = float(((current_price / hist["Close"].iloc[-5]) - 1) * 100) if len(hist) >= 5 and current_price else None
+        change_1m = float(((current_price / hist["Close"].iloc[-21]) - 1) * 100) if len(hist) >= 21 and current_price else None
+        change_3m = float(((current_price / hist["Close"].iloc[-63]) - 1) * 100) if len(hist) >= 63 and current_price else None
+
+        # Volume: use 30-day average from history if available
+        if len(hist) >= 5 and "Volume" in hist.columns:
+            avg_volume = int(hist["Volume"].tail(30).mean())
+            volume = int(hist["Volume"].iloc[-1]) if hist["Volume"].iloc[-1] > 0 else avg_volume
+        else:
+            avg_volume = max(volume, 1)
+        volume_ratio = volume / avg_volume if avg_volume > 0 else 1
+
+        return StockData(
+            symbol=symbol,
+            name=meta["name"],
+            current_price=current_price,
+            previous_close=previous_close,
+            change_percent=change_percent,
+            volume=volume,
+            avg_volume=avg_volume,
+            volume_ratio=volume_ratio,
+            high_52w=high_52w,
+            low_52w=low_52w,
+            market_cap=market_cap,
+            pe_ratio=None,  # not available in fast_info; omit to avoid slow .info call
+            notes=meta["notes"],
+            category=meta["category"],
+            sma_20=sma_20,
+            sma_50=sma_50,
+            sma_200=sma_200,
+            rsi_14=rsi_14,
+            change_1w=change_1w,
+            change_1m=change_1m,
+            change_3m=change_3m,
+        )
 
     def _get_stock_data(
         self,
@@ -185,36 +279,22 @@ class StockCollector:
         category: str,
         notes: str = "",
     ) -> StockData:
-        """Get comprehensive data for a single stock."""
+        """Get data for a single stock (used for indices and fallback)."""
         ticker = yf.Ticker(symbol)
         info = ticker.info
-
-        # Get historical data for technical analysis
         hist = ticker.history(period="1y")
 
-        # Calculate moving averages
         sma_20 = hist["Close"].rolling(window=20).mean().iloc[-1] if len(hist) >= 20 else None
         sma_50 = hist["Close"].rolling(window=50).mean().iloc[-1] if len(hist) >= 50 else None
         sma_200 = hist["Close"].rolling(window=200).mean().iloc[-1] if len(hist) >= 200 else None
-
-        # Calculate RSI
         rsi_14 = self._calculate_rsi(hist["Close"], 14)
 
-        # Calculate performance periods
-        current_price = info.get("regularMarketPrice", hist["Close"].iloc[-1])
+        current_price = info.get("regularMarketPrice", hist["Close"].iloc[-1] if not hist.empty else 0)
 
-        change_1w = None
-        change_1m = None
-        change_3m = None
+        change_1w = ((current_price / hist["Close"].iloc[-5]) - 1) * 100 if len(hist) >= 5 else None
+        change_1m = ((current_price / hist["Close"].iloc[-21]) - 1) * 100 if len(hist) >= 21 else None
+        change_3m = ((current_price / hist["Close"].iloc[-63]) - 1) * 100 if len(hist) >= 63 else None
 
-        if len(hist) >= 5:
-            change_1w = ((current_price / hist["Close"].iloc[-5]) - 1) * 100
-        if len(hist) >= 21:
-            change_1m = ((current_price / hist["Close"].iloc[-21]) - 1) * 100
-        if len(hist) >= 63:
-            change_3m = ((current_price / hist["Close"].iloc[-63]) - 1) * 100
-
-        # Volume analysis
         volume = info.get("regularMarketVolume", 0)
         avg_volume = info.get("averageVolume", 1)
         volume_ratio = volume / avg_volume if avg_volume > 0 else 1

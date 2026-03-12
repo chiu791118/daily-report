@@ -11,9 +11,6 @@ from dataclasses import dataclass, field
 import re
 import yaml
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config.settings import (
     NEWS_RSS_FEEDS,
