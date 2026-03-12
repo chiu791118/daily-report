@@ -1,17 +1,10 @@
-name: Daily Market Digest
+name: Daily Report 2.0
 
 on:
   schedule:
     # Pre-market: 18:00 Taiwan time (Mon-Fri)
     # 10:00 UTC = 18:00 Taiwan (UTC+8)
     - cron: '0 10 * * 1-5'
-    # Post-market: 09:00 Taiwan time (Tue-Sat, for Mon-Fri markets)
-    # 01:00 UTC = 09:00 Taiwan (UTC+8)
-    - cron: '0 1 * * 2-6'
-    # Saturday report: 9am Taiwan time = 1:00 UTC Saturday
-    - cron: '0 1 * * 6'
-    # Sunday report: 6pm Taiwan time = 10:00 UTC Sunday
-    - cron: '0 10 * * 0'
   workflow_dispatch:
     inputs:
       report_type:
@@ -21,9 +14,6 @@ on:
         type: choice
         options:
           - pre-market
-          - post-market
-          - saturday
-          - sunday
           - test
 
 jobs:
@@ -50,26 +40,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "type=${{ github.event.inputs.report_type }}" >> $GITHUB_OUTPUT
           else
-            # Determine based on which cron schedule triggered (not current time)
-            # This avoids issues with GitHub Actions scheduling delays
-            SCHEDULE="${{ github.event.schedule }}"
-            case "$SCHEDULE" in
-              "0 10 * * 1-5")
-                echo "type=pre-market" >> $GITHUB_OUTPUT
-                ;;
-              "0 1 * * 2-6")
-                echo "type=post-market" >> $GITHUB_OUTPUT
-                ;;
-              "0 1 * * 6")
-                echo "type=saturday" >> $GITHUB_OUTPUT
-                ;;
-              "0 10 * * 0")
-                echo "type=sunday" >> $GITHUB_OUTPUT
-                ;;
-              *)
-                echo "type=pre-market" >> $GITHUB_OUTPUT
-                ;;
-            esac
+            echo "type=pre-market" >> $GITHUB_OUTPUT
           fi
 
       - name: Generate report
