@@ -20,65 +20,6 @@ class MarkdownReportGenerator:
     def __init__(self):
         self.tz = pytz.timezone(TIMEZONE)
 
-    def generate_post_market_report(
-        self,
-        trading_date: str,
-        market_review: str,
-        watchlist_summary: str,
-        after_hours_news: str = "",
-        tomorrow_outlook: str = "",
-        regulatory_updates: str = "",
-    ) -> str:
-        """Generate post-market (05:00 Taiwan time) report."""
-        now = datetime.now(self.tz)
-
-        # Build regulatory section if available
-        regulatory_section = ""
-        if regulatory_updates:
-            regulatory_section = f"""
----
-
-## 📋 監管與公告動態
-
-{regulatory_updates}
-"""
-
-        report = f"""# 📉 每日市場摘要 - 收盤後報告
-
-**美股交易日:** {trading_date}
-**生成時間:** {now.strftime("%Y-%m-%d %H:%M")} (台北時間)
-**報告類型:** 美股收盤後覆盤
-
----
-
-## 📊 今日交易回顧
-
-{market_review}
-
----
-
-## 📈 觀察清單表現
-
-{watchlist_summary}
-
----
-
-## 📰 盤後重要消息
-
-{after_hours_news if after_hours_news else "今日盤後無重大消息。"}
-{regulatory_section}
----
-
-## 🔮 明日展望
-
-{tomorrow_outlook if tomorrow_outlook else "明日無特別需要關注的事件。"}
-
----
-
-*Daily Market Digest | {trading_date}*
-"""
-        return report
-
     def save_report_to_date(self, content: str, report_type: str, date_str: str) -> Path:
         """Save report to a specific date folder."""
         # Create date directory
@@ -157,103 +98,6 @@ class MarkdownReportGenerator:
 
         return "\n".join(lines)
 
-    def generate_saturday_report(
-        self,
-        week_market_summary: str,
-        industry_analysis: str,
-        watchlist_summary: str,
-    ) -> str:
-        """
-        Generate Saturday industry cognition report (9am Taiwan time).
-
-        This report follows the 8-section structure:
-        0. This Week's Thesis
-        1. Executive Brief
-        2. Paradigm Shift Radar
-        3. Industry Cognition Map Updates
-        4. Technology Frontier
-        5. Company Moves & Strategic Implications
-        6. IP / Regulation / Talent Signals
-        7. Key Metrics & Benchmarks
-        8. Watchlist & Scenarios
-        """
-        now = datetime.now(self.tz)
-        date_str = now.strftime("%Y-%m-%d")
-        week_num = now.isocalendar()[1]
-
-        report = f"""# 每週產業認知更新報告
-
-**週次:** {now.year} W{week_num}
-**日期:** {date_str}
-**生成時間:** {now.strftime("%Y-%m-%d %H:%M")} (台北時間)
-
-> 本報告為頂尖管理顧問與投資顧問設計，聚焦「認知更新」而非「資訊重述」。
-> 明確區分【事實】【推論】【待驗證假說】。
-
----
-
-## 📈 本週市場概覽
-
-{week_market_summary}
-
----
-
-{industry_analysis}
-
----
-
-## 📊 觀察清單概覽
-
-{watchlist_summary}
-
----
-
-**免責聲明：** 本報告僅供研究參考，不構成投資建議。投資決策請諮詢專業顧問。
-
-*Weekly Industry Cognition Report | {date_str}*
-"""
-        return report
-
-    def generate_sunday_report(
-        self,
-        weekly_recap: str,
-        weekly_outlook: str,
-        watchlist_summary: str,
-    ) -> str:
-        """Generate Sunday weekly outlook report (6pm Taiwan time)."""
-        now = datetime.now(self.tz)
-        date_str = now.strftime("%Y-%m-%d")
-
-        report = f"""# 🔮 週末展望報告 - 下週市場展望
-
-**日期:** {date_str}
-**生成時間:** {now.strftime("%Y-%m-%d %H:%M")} (台北時間)
-**報告類型:** 週日下週展望
-
----
-
-## 📅 本週市場總結
-
-{weekly_recap}
-
----
-
-## 🔭 下週展望與策略
-
-{weekly_outlook}
-
----
-
-## 📊 觀察清單狀態
-
-{watchlist_summary}
-
----
-
-*Daily Market Digest - 週末展望報告 | {date_str}*
-"""
-        return report
-
     def generate_pre_market_report_v3(
         self,
         sections: dict,
@@ -261,6 +105,7 @@ class MarkdownReportGenerator:
         economic_rows: list,
         earnings_rows: list,
         news_digest: list,
+        yesterday_changes: dict = None,
         regulatory_updates: str = "",
         economic_note: str = "",
         earnings_note: str = "",
@@ -273,102 +118,111 @@ class MarkdownReportGenerator:
         date_tw = now_tw.strftime("%Y-%m-%d")
         date_et = now_et.strftime("%Y-%m-%d")
 
-        # Economic calendar section
-        economic_section = self._format_economic_calendar(economic_rows, economic_note)
-
-        # Earnings calendar section
-        earnings_section = self._format_earnings_calendar(earnings_rows, earnings_note)
-
-        # Market snapshot
+        # Sections
+        es = self._format_numbered(sections.get("executive_summary", []), 3)
         market_snapshot = self._format_market_snapshot(market_overview)
-
-        # Sections from analyzer
-        key_takeaways = self._format_numbered(sections.get("key_takeaways", []), 5)
-        geo_events = self._format_bullets(sections.get("geo_events", []))
-        market_state = self._format_bullets(sections.get("market_state", []))
+        economic_section = self._format_economic_calendar(economic_rows, economic_note)
+        earnings_section = self._format_earnings_calendar(earnings_rows, earnings_note)
+        changes_section = self._format_yesterday_changes(yesterday_changes)
         watchlist_focus = self._format_watchlist_table(sections.get("watchlist_focus", []))
         event_driven = self._format_event_driven_table(sections.get("event_driven", []))
-        monitor_list = self._format_bullets(sections.get("monitor_list", []))
-
-        # News digest
         news_digest_section = self._format_news_digest(news_digest)
 
         regulatory_section = ""
         if regulatory_updates:
-            regulatory_section = f"""
+            regulatory_section = f"\n### 監管動態\n\n{regulatory_updates}\n"
+
+        report = f"""# 盤前簡報
+
+**{date_et} (ET) / {date_tw} (台北)** | {now_et.strftime('%H:%M')} ET / {now_tw.strftime('%H:%M')} 台北
 
 ---
 
-## 📋 監管與公告動態
+## ES | Executive Summary
 
-{regulatory_updates}
-"""
-
-        report = f"""# 📈 每日市場摘要 - 開盤前報告 V3
-
-**📅 {date_et} (ET) / {date_tw} (台北)**
-**⏰ 生成時間:** {now_et.strftime('%H:%M')} ET / {now_tw.strftime('%H:%M')} 台北
+{es}
 
 ---
 
-## A. 今日盤前 5 條關鍵結論
+## 市場快照
 
-{key_takeaways}
-
+{market_snapshot}
 ---
 
-## B. 今日經濟日程（ET / 台北）
+## 今日日程
+
+### 經濟數據
 
 {economic_section}
 
----
-
-## C. 重要財報日程（ET / 台北）
+### 財報
 
 {earnings_section}
 
 ---
 
-## D. 國際與地區重點事件 → 對美股的潛在牽動
+## 昨日→今日 變化信號
 
-{geo_events}
-
----
-
-## E. 市場狀態與短期風險圖
-
-{market_snapshot}
-{market_state}
+{changes_section}
 
 ---
 
-## F. 今日必看（你的觀察清單）
+## 今日必看
 
 {watchlist_focus}
 
 ---
 
-## G. 事件驅動清單外公司
+## 事件驅動
 
 {event_driven}
 
 ---
 
-## H. 開盤後監測清單
+## 參考資料
 
-{monitor_list}
-
----
-
-## 參考新聞（Top）
+### 新聞
 
 {news_digest_section}
-{regulatory_section}
 
+{regulatory_section}
 ---
-*Daily Market Digest V3 | {date_tw}*
+*Daily Report | {date_tw}*
 """
         return report
+
+    def _format_yesterday_changes(self, changes: dict) -> str:
+        """Format hidden layer output for direct display."""
+        if not changes:
+            return "昨日報告不可用，無法進行變化比較。"
+
+        lines = []
+
+        # Group by type
+        for change_type, label in [("反轉", "反轉信號"), ("新發現", "新發現"), ("延續", "延續")]:
+            items = []
+            for c in changes.get("macro_changes", []):
+                if c.get("type") == change_type:
+                    assets = ", ".join(c.get("related_assets", []))
+                    items.append(f"[宏觀] {c.get('summary', '')} → {c.get('impact', '')}" + (f" ({assets})" if assets else ""))
+            for c in changes.get("industry_changes", []):
+                if c.get("type") == change_type:
+                    tickers = ", ".join(c.get("related_tickers", []))
+                    items.append(f"[{c.get('industry', '行業')}] {c.get('summary', '')} → {c.get('impact', '')}" + (f" ({tickers})" if tickers else ""))
+            for c in changes.get("company_changes", []):
+                if c.get("type") == change_type:
+                    items.append(f"[{c.get('ticker', '')}] {c.get('summary', '')} — {c.get('catalyst', '')} ({c.get('action_signal', '')})")
+
+            if items:
+                lines.append(f"**{label}：**")
+                for item in items:
+                    lines.append(f"- {item}")
+                lines.append("")
+
+        if not lines:
+            return "今日無顯著變化信號。"
+
+        return "\n".join(lines)
 
     def _format_economic_calendar(self, rows: list, note: str = "") -> str:
         if not rows:

@@ -185,6 +185,7 @@ class PreMarketV3Analyzer:
             "watchlist_focus_symbols": [c["symbol"] for c in watchlist_candidates[:8]],
             "event_driven_symbols": [c["symbol"] for c in event_candidates[:8]],
             "news_digest": news_digest[:12],
+            "yesterday_changes": yesterday_changes,
         }
 
         return sections, meta
@@ -365,9 +366,11 @@ class PreMarketV3Analyzer:
 
     def _fallback_sections(self, watchlist_candidates, event_candidates):
         return {
-            "key_takeaways": ["資料解析失敗，請檢查模型輸出。"],
-            "geo_events": [],
-            "market_state": [],
+            "executive_summary": [
+                "LLM 解析失敗 → 請檢查模型輸出 → 以下為自動回退內容",
+                "資料已收集完成 → 但結構化分析未能產出 → 請參考原始數據判斷",
+                "建議手動檢視參考資料區段 → 確認數據源正常 → 下次執行應恢復",
+            ],
             "watchlist_focus": [
                 {
                     "symbol": c["symbol"],
@@ -384,7 +387,6 @@ class PreMarketV3Analyzer:
                 }
                 for c in event_candidates[:5]
             ],
-            "monitor_list": ["盤後補充檢查數據來源與模型輸出"],
         }
 
 

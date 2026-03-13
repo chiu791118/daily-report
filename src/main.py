@@ -90,7 +90,7 @@ def _collect_fda_summary(days_lookback: int, max_results: int) -> str:
         lines = ["### 🏥 FDA 最新動態\n"]
         for update in updates[:5]:
             lines.append(f"- **[{update.category}]** {update.title}")
-            if update.summary:
+            if update.summary and update.summary.strip() != update.title.strip():
                 summary_text = update.summary[:150] + "..." if len(update.summary) > 150 else update.summary
                 lines.append(f"  - {summary_text}")
         return "\n".join(lines)
@@ -208,6 +208,7 @@ def generate_pre_market_report():
         economic_rows=econ_rows,
         earnings_rows=earnings_rows,
         news_digest=meta.get("news_digest", []),
+        yesterday_changes=meta.get("yesterday_changes"),
         regulatory_updates=regulatory_updates,
         economic_note=econ_collector.last_warning,
         earnings_note=earnings_collector.last_warning,
