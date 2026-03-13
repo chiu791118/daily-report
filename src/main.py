@@ -17,9 +17,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytz
 
+from google import genai
+from google.genai import types
+
 from src.config.settings import (
     TIMEZONE,
     GEMINI_API_KEY,
+    GEMINI_MODEL,
     NOTION_API_KEY,
     NOTION_DATABASE_ID,
     US_EASTERN_TZ,
@@ -99,6 +103,29 @@ def _collect_fda_summary(days_lookback: int, max_results: int) -> str:
         return ""
 
 
+def _translate_fda_summary(fda_summary: str) -> str:
+    """Add Chinese translations to FDA summary entries."""
+    if not fda_summary or not GEMINI_API_KEY:
+        return fda_summary
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        prompt = (
+            "將以下 FDA 動態的英文內容翻譯為繁體中文。"
+            "保持原有 markdown 格式，在每個英文項目後面換行加上「  → （中文翻譯）」。"
+            "只輸出結果，不要其他說明。\n\n"
+            f"{fda_summary}"
+        )
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=1500),
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"   ⚠️ FDA translation error: {e}")
+        return fda_summary
+
+
 def _build_regulatory_updates(sec_summary: str, fda_summary: str) -> str:
     """Combine SEC and FDA summaries into a single regulatory section."""
     parts = [s for s in [sec_summary, fda_summary] if s]
@@ -174,6 +201,9 @@ def generate_pre_market_report():
     print()
     sec_summary = _collect_sec_summary(hours_lookback=48, max_filings=20)
     fda_summary = _collect_fda_summary(days_lookback=2, max_results=10)
+    if fda_summary:
+        print("🌐 Translating FDA updates...")
+        fda_summary = _translate_fda_summary(fda_summary)
     regulatory_updates = _build_regulatory_updates(sec_summary, fda_summary)
 
     # Fetch yesterday's pre-market report for hidden layer comparison
@@ -219,7 +249,9 @@ def generate_pre_market_report():
     title_date = now_tw.strftime("%y%m%d")
     title = f"{title_date}_Pre-market"
 
-    tags = (meta.get("watchlist_focus_symbols", []) + meta.get("event_driven_symbols", []))[:10]
+    tags = [item.get("symbol") for item in sections.get("watchlist_focus", []) if item.get("symbol")]
+    tags += [item.get("symbol") for item in sections.get("event_driven", []) if item.get("symbol")]
+    tags = tags[:10]
     print(f"   Tags: {tags}")
     # notion_publisher already initialized above
     page_url = notion_publisher.create_daily_page(

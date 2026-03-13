@@ -38,10 +38,10 @@ class MarkdownReportGenerator:
         return filepath
 
     def _sentiment_emoji(self, sentiment: str) -> str:
-        """Get emoji for sentiment."""
+        """Get emoji for sentiment (Chinese stock convention: red=up, green=down)."""
         emoji_map = {
-            "bullish": "🟢",
-            "bearish": "🔴",
+            "bullish": "🔴",
+            "bearish": "🟢",
             "neutral": "🟡",
             "unknown": "⚪",
         }
@@ -167,7 +167,7 @@ class MarkdownReportGenerator:
 
 ---
 
-## 今日必看
+## Watch List
 
 {watchlist_focus}
 
@@ -261,15 +261,22 @@ class MarkdownReportGenerator:
     def _format_market_snapshot(self, overview) -> str:
         lines = []
         if overview.sp500:
-            lines.append(f"- S&P 500: {overview.sp500.current_price:,.2f} ({overview.sp500.change_percent:+.2f}%)")
+            color = "🔴" if overview.sp500.change_percent >= 0 else "🟢"
+            lines.append(f"- {color} S&P 500: {overview.sp500.current_price:,.2f} ({overview.sp500.change_percent:+.2f}%)")
         if overview.nasdaq:
-            lines.append(f"- NASDAQ: {overview.nasdaq.current_price:,.2f} ({overview.nasdaq.change_percent:+.2f}%)")
+            color = "🔴" if overview.nasdaq.change_percent >= 0 else "🟢"
+            lines.append(f"- {color} NASDAQ: {overview.nasdaq.current_price:,.2f} ({overview.nasdaq.change_percent:+.2f}%)")
         if overview.dow:
-            lines.append(f"- Dow Jones: {overview.dow.current_price:,.2f} ({overview.dow.change_percent:+.2f}%)")
+            color = "🔴" if overview.dow.change_percent >= 0 else "🟢"
+            lines.append(f"- {color} Dow Jones: {overview.dow.current_price:,.2f} ({overview.dow.change_percent:+.2f}%)")
         if overview.vix is not None:
-            lines.append(f"- VIX: {overview.vix:.2f} ({overview.vix_change:+.2f}%)")
+            vix_chg = overview.vix_change or 0
+            # VIX is inverse: VIX up = bearish (green), VIX down = bullish (red)
+            color = "🟢" if vix_chg >= 0 else "🔴"
+            lines.append(f"- {color} VIX: {overview.vix:.2f} ({vix_chg:+.2f}%)")
         if overview.market_sentiment:
-            lines.append(f"- 市場情緒: {overview.market_sentiment}")
+            emoji = self._sentiment_emoji(overview.market_sentiment)
+            lines.append(f"- {emoji} 市場情緒: {overview.market_sentiment}")
         if not lines:
             return "- 市場數據不足\n"
         return "\n".join(lines) + "\n"
