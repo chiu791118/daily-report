@@ -34,7 +34,7 @@ from src.collectors.fda import FDACollector
 from src.collectors.economic_calendar import EconomicCalendarCollector
 from src.collectors.earnings import EarningsCalendarCollector
 from src.collectors.universe import UniverseCollector
-from src.analyzers.pre_market_v3 import PreMarketV3Analyzer
+from src.analyzers.pre_market_v4 import PreMarketV4Analyzer
 from src.outputs import MarkdownReportGenerator, NotionPublisher
 
 
@@ -137,7 +137,7 @@ def generate_pre_market_report():
     Generate pre-market report V3 (focused briefing format).
     """
     print("\n" + "="*60)
-    print("📈 Generating Pre-Market Report V3")
+    print("📈 Generating Pre-Market Report V4")
     print("="*60)
 
     tz_tw = pytz.timezone(TIMEZONE)
@@ -215,9 +215,9 @@ def generate_pre_market_report():
     else:
         print(f"   {yesterday_report['fallback_note']}")
 
-    # Generate report sections with LLM
-    print("\n🤖 Generating V3 sections...")
-    analyzer = PreMarketV3Analyzer()
+    # Generate report sections with LLM (4-stage pipeline)
+    print("\n🤖 Generating V4 sections (4-stage pipeline)...")
+    analyzer = PreMarketV4Analyzer()
     sections, meta = analyzer.generate_sections(
         market_overview=market_overview,
         economic_events=econ_events,
@@ -232,13 +232,12 @@ def generate_pre_market_report():
 
     # Generate final report
     print("\n📝 Generating final report...")
-    report = report_generator.generate_pre_market_report_v3(
+    report = report_generator.generate_pre_market_report_v4(
         sections=sections,
         market_overview=market_overview,
         economic_rows=econ_rows,
         earnings_rows=earnings_rows,
         news_digest=meta.get("news_digest", []),
-        yesterday_changes=meta.get("yesterday_changes"),
         regulatory_updates=regulatory_updates,
         economic_note=econ_collector.last_warning,
         earnings_note=earnings_collector.last_warning,
@@ -249,8 +248,8 @@ def generate_pre_market_report():
     title_date = now_tw.strftime("%y%m%d")
     title = f"{title_date}_Pre-market"
 
-    tags = [item.get("symbol") for item in sections.get("watchlist_focus", []) if item.get("symbol")]
-    tags += [item.get("symbol") for item in sections.get("event_driven", []) if item.get("symbol")]
+    tags = [item.get("symbol") for item in sections.get("watchlist_analysis", []) if item.get("symbol")]
+    tags += [item.get("symbol") for item in sections.get("anomaly_tickers", []) if item.get("symbol")]
     tags = tags[:10]
     print(f"   Tags: {tags}")
     # notion_publisher already initialized above
@@ -261,7 +260,7 @@ def generate_pre_market_report():
         date_str=date_tw_str,
         tags=tags,
     )
-    print(f"\n✅ Pre-market report V3 uploaded to Notion: {page_url}")
+    print(f"\n✅ Pre-market report V4 uploaded to Notion: {page_url}")
 
     return page_url
 
@@ -320,8 +319,8 @@ def test_components():
     print("\n3️⃣ Testing AI Analyzers...")
     if GEMINI_API_KEY:
         try:
-            analyzer = PreMarketV3Analyzer()
-            print("   ✅ PreMarketV3Analyzer initialized")
+            analyzer = PreMarketV4Analyzer()
+            print("   ✅ PreMarketV4Analyzer initialized")
         except Exception as e:
             print(f"   ❌ Error: {e}")
     else:
